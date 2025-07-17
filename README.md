@@ -27,4 +27,5 @@ Downloads files, restoring archived files.
 - [ ] Download a file from S3 glacier
 - [ ] Resume an upload after the program (or system) restarts
 - [ ] Specify a monthly download limit to stay within the AWS Free Tier limit
-- [ ] Reports progress in operations
+- [ ] Reports progress of an upload
+- [x] Reports progress of a download
