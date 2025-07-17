@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, num::TryFromIntError};
 
 use aws_sdk_s3::{
     error::SdkError,
@@ -6,6 +6,7 @@ use aws_sdk_s3::{
     primitives::{ByteStream, ByteStreamError},
     types::StorageClass,
 };
+use sipper::{Straw, sipper};
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 
@@ -56,14 +57,16 @@ pub struct S3Src<'a> {
 pub struct DownloadInput<'a> {
     pub client: &'a aws_sdk_s3::Client,
     pub src: S3Src<'a>,
-    pub dest: &'a str,
+    pub dest: &'a mut tokio::fs::File,
 }
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum DownloadError {
-    #[error("Error creating the file")]
-    CreateError(io::Error),
+    #[error("No content length")]
+    NoContentLength,
+    #[error("For some reason the content length is an i64 and could not be converted to usize")]
+    ContentLengthConversion(TryFromIntError),
     #[error("Error creating the download request")]
     GetObjectError(SdkError<GetObjectError>),
     #[error("Error while downloading the object")]
@@ -72,31 +75,48 @@ pub enum DownloadError {
     WriteError(io::Error),
 }
 
-pub async fn download(input: DownloadInput<'_>) -> Result<(), DownloadError> {
-    // Make sure the file can be created before downloading
-    let mut file = tokio::fs::File::options()
-        .write(true)
-        .create_new(true)
-        .open(input.dest)
-        .await
-        .map_err(DownloadError::CreateError)?;
-    let mut output = input
-        .client
-        .get_object()
-        .bucket(input.src.bucket)
-        .key(input.src.object_key)
-        .send()
-        .await
-        .map_err(DownloadError::GetObjectError)?;
-    while let Some(bytes) = output
-        .body
-        .try_next()
-        .await
-        .map_err(DownloadError::DownloadStreamError)?
-    {
-        file.write_all(&bytes)
+#[derive(Debug, Clone, Copy)]
+pub struct DownloadProgress {
+    pub downloaded_from_s3: usize,
+    pub written_to_file: usize,
+    pub total: usize,
+}
+
+pub async fn download(input: DownloadInput<'_>) -> impl Straw<(), DownloadProgress, DownloadError> {
+    sipper(async move |mut sender| {
+        let mut output = input
+            .client
+            .get_object()
+            .bucket(input.src.bucket)
+            .key(input.src.object_key)
+            .send()
             .await
-            .map_err(DownloadError::WriteError)?;
-    }
-    Ok(())
+            .map_err(DownloadError::GetObjectError)?;
+        let mut progress = DownloadProgress {
+            total: output
+                .content_length
+                .ok_or(DownloadError::NoContentLength)?
+                .try_into()
+                .map_err(DownloadError::ContentLengthConversion)?,
+            downloaded_from_s3: 0,
+            written_to_file: 0,
+        };
+        while let Some(bytes) = output
+            .body
+            .try_next()
+            .await
+            .map_err(DownloadError::DownloadStreamError)?
+        {
+            progress.downloaded_from_s3 += bytes.len();
+            sender.send(progress).await;
+            input
+                .dest
+                .write_all(&bytes)
+                .await
+                .map_err(DownloadError::WriteError)?;
+            progress.written_to_file += bytes.len();
+            sender.send(progress).await;
+        }
+        Ok(())
+    })
 }
