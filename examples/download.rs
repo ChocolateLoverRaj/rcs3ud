@@ -1,5 +1,5 @@
 use aws_config::BehaviorVersion;
-use rcs3ud::{DownloadInput, S3Src, download};
+use rcs3ud::{DownloadInput, DownloadStrategy, S3Src, download};
 use sipper::Sipper;
 use tokio::fs::File;
 
@@ -20,6 +20,7 @@ async fn main() {
             object_key: "README.md",
         },
         dest: &mut dest,
+        strategy: DownloadStrategy::Warm,
     })
     .await
     .pin();

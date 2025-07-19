@@ -21,6 +21,7 @@ Downloads files, restoring archived files.
 
 ## Features (in progress)
 - [x] Upload a file to S3
+- [x] Gracefully handles errors and retries when uploading
 - [ ] Specify times to not upload (such as during the day)
 - [ ] Limit monthly upload amounts (if your internet has a monthly limit)
 - [x] Download a file from S3

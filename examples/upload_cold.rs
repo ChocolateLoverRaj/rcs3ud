@@ -15,7 +15,7 @@ async fn main() {
         dest: S3Dest {
             bucket: "rcs3ud",
             object_key: "README.md",
-            storage_class: StorageClass::Standard,
+            storage_class: StorageClass::DeepArchive,
         },
         retry_interval: Duration::from_secs(5),
     })
