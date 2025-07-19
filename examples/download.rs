@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use aws_config::BehaviorVersion;
 use rcs3ud::{DownloadInput, DownloadStrategy, S3Src, download};
 use sipper::Sipper;
@@ -10,6 +12,7 @@ async fn main() {
     let mut dest = File::options()
         .truncate(true)
         .write(true)
+        .create(true)
         .open("Downloaded README.md")
         .await
         .unwrap();
@@ -21,12 +24,13 @@ async fn main() {
         },
         dest: &mut dest,
         strategy: DownloadStrategy::Warm,
+        retry_interval: Duration::from_secs(5),
     })
     .await
     .pin();
-    while let Some(progress) = straw.sip().await {
-        println!("{progress:?}")
+    while let Some(event) = straw.sip().await {
+        println!("{event:#?}")
     }
     straw.await.unwrap();
-    println!("Complete");
+    println!("Downloaded successfully.");
 }

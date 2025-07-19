@@ -1,14 +1,17 @@
 use std::{io, num::TryFromIntError, time::Duration};
 
+use crate::retry::KeepRetryingExt;
 use aws_sdk_s3::{
     error::SdkError,
     operation::{get_object::GetObjectError, restore_object::RestoreObjectError},
     primitives::ByteStreamError,
     types::{RestoreRequest, Tier},
 };
-use sipper::{Sender, Straw, sipper};
+use sipper::{Sipper, Straw, sipper};
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, time::sleep};
+
+use crate::maybe_retryable_sdk_error::IntoMaybeRetryable;
 
 pub enum DownloadStrategy {
     /// For storage classes that don't need a restore, such as `STANDARD`.
@@ -35,6 +38,7 @@ pub struct DownloadInput<'a> {
     pub src: S3Src<'a>,
     pub dest: &'a mut tokio::fs::File,
     pub strategy: DownloadStrategy,
+    pub retry_interval: Duration,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -65,51 +69,62 @@ pub struct DownloadProgress {
     pub total: usize,
 }
 
-async fn download_warm(
-    input: DownloadInput<'_>,
-    mut sender: Sender<DownloadProgress>,
-) -> Result<(), DownloadError> {
-    let mut output = input
-        .client
-        .get_object()
-        .bucket(input.src.bucket)
-        .key(input.src.object_key)
-        .send()
-        .await
-        .map_err(DownloadError::GetObjectError)?;
-    let mut progress = DownloadProgress {
-        total: output
-            .content_length
-            .ok_or(DownloadError::NoContentLength)?
-            .try_into()
-            .map_err(DownloadError::ContentLengthConversion)?,
-        downloaded_from_s3: 0,
-        written_to_file: 0,
-    };
-    while let Some(bytes) = output
-        .body
-        .try_next()
-        .await
-        .map_err(DownloadError::DownloadStreamError)?
-    {
-        progress.downloaded_from_s3 += bytes.len();
-        sender.send(progress).await;
-        input
-            .dest
-            .write_all(&bytes)
-            .await
-            .map_err(DownloadError::WriteError)?;
-        progress.written_to_file += bytes.len();
-        sender.send(progress).await;
-    }
-    Ok(())
+#[derive(Debug)]
+pub enum DownloadEvent {
+    DownloadError(SdkError<GetObjectError>),
+    DownloadProgress(DownloadProgress),
 }
 
-pub async fn download(input: DownloadInput<'_>) -> impl Straw<(), DownloadProgress, DownloadError> {
+fn download_warm(input: DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
+    sipper(async move |mut sender| {
+        let mut output = (async || {
+            input
+                .client
+                .get_object()
+                .bucket(input.src.bucket)
+                .key(input.src.object_key)
+                .send()
+                .await
+                .map_err(|e| e.into_maybe_retryable().map(DownloadError::GetObjectError))
+        })
+        .keep_retrying(input.retry_interval)
+        .with(|e| DownloadEvent::DownloadError(e))
+        .run(sender.clone())
+        .await?;
+        let mut progress = DownloadProgress {
+            total: output
+                .content_length
+                .ok_or(DownloadError::NoContentLength)?
+                .try_into()
+                .map_err(DownloadError::ContentLengthConversion)?,
+            downloaded_from_s3: 0,
+            written_to_file: 0,
+        };
+        while let Some(bytes) = output
+            .body
+            .try_next()
+            .await
+            .map_err(DownloadError::DownloadStreamError)?
+        {
+            progress.downloaded_from_s3 += bytes.len();
+            sender.send(DownloadEvent::DownloadProgress(progress)).await;
+            input
+                .dest
+                .write_all(&bytes)
+                .await
+                .map_err(DownloadError::WriteError)?;
+            progress.written_to_file += bytes.len();
+            sender.send(DownloadEvent::DownloadProgress(progress)).await;
+        }
+        Ok(())
+    })
+}
+
+pub async fn download(input: DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
     sipper(async move |sender| {
         match input.strategy {
             DownloadStrategy::Warm => {
-                download_warm(input, sender).await?;
+                download_warm(input).run(sender).await?;
             }
             DownloadStrategy::Cold(WaitForRestoreStrategy::PollGet(poll_interval)) => {
                 input
@@ -145,7 +160,7 @@ pub async fn download(input: DownloadInput<'_>) -> impl Straw<(), DownloadProgre
                         }
                     }
                 }?;
-                download_warm(input, sender).await?;
+                download_warm(input).run(sender).await?;
             }
         }
         Ok(())
