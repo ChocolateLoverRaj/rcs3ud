@@ -1,4 +1,8 @@
-use std::{io, num::TryFromIntError, time::Duration};
+use std::{
+    io,
+    num::TryFromIntError,
+    time::{Duration, SystemTime},
+};
 
 use crate::retry::KeepRetryingExt;
 use aws_sdk_s3::{
@@ -10,6 +14,7 @@ use aws_sdk_s3::{
     primitives::ByteStreamError,
     types::{GlacierJobParameters, RestoreRequest, Tier},
 };
+use serde::{Deserialize, Serialize};
 use sipper::{Sipper, Straw, sipper};
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, time::sleep};
@@ -41,12 +46,28 @@ pub struct S3Src<'a> {
     pub object_key: &'a str,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestoreInitiatedProgress {
+    /// Contains the time right after the restore request was completed, or the time after the last head object request was completed.
+    last_checked: SystemTime,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub enum SavedProgress {
+    #[default]
+    WillInitiateRestore,
+    RestoreInitiated(RestoreInitiatedProgress),
+    /// The file is ready to download or downloading
+    RestoreComplete,
+}
+
 pub struct DownloadInput<'a> {
     pub client: &'a aws_sdk_s3::Client,
     pub src: S3Src<'a>,
     pub dest: &'a mut tokio::fs::File,
     pub strategy: DownloadStrategy,
     pub retry_interval: Duration,
+    pub saved_progress: SavedProgress,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -90,9 +111,10 @@ pub enum DownloadEvent {
     /// The object is restored and available to download
     RestoreComplete,
     CheckStatusError(SdkError<HeadObjectError>),
+    UpdateSavedProgress(SavedProgress),
 }
 
-fn download_warm(input: DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
+fn download_warm(input: &mut DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
     sipper(async move |mut sender| {
         let mut output = (async || {
             input
@@ -137,80 +159,159 @@ fn download_warm(input: DownloadInput<'_>) -> impl Straw<(), DownloadEvent, Down
     })
 }
 
-pub async fn download(input: DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
+pub async fn download(
+    mut input: DownloadInput<'_>,
+) -> impl Straw<(), DownloadEvent, DownloadError> {
     sipper(async move |mut sender| {
-        match &input.strategy {
-            DownloadStrategy::Warm => {
-                download_warm(input).run(sender).await?;
-            }
-            DownloadStrategy::Cold(cold_input) => {
-                match cold_input.wait_for_restore_stratey {
-                    WaitForRestoreStrategy::PollGet(poll_interval) => {
-                        (async || {
-                            input
-                                .client
-                                .restore_object()
-                                .bucket(input.src.bucket)
-                                .key(input.src.object_key)
-                                .restore_request(
-                                    RestoreRequest::builder()
-                                        .days(1)
-                                        .glacier_job_parameters(
-                                            GlacierJobParameters::builder()
-                                                .tier(cold_input.tier.clone())
-                                                .build()
-                                                // Will always be Ok since we specified tier
-                                                .unwrap(),
-                                        )
-                                        .build(),
-                                )
-                                .send()
-                                .await
-                                .map_err(|e| {
-                                    e.into_maybe_retryable().map(DownloadError::RestoreError)
-                                })
-                        })
-                        .keep_retrying(input.retry_interval)
-                        .with(DownloadEvent::RestoreError)
-                        .run(sender.clone())
-                        .await?;
-                        sender.send(DownloadEvent::RestoreInitiated).await;
-                        loop {
-                            sleep(poll_interval).await;
+        let mut progress = input.saved_progress.clone();
+        loop {
+            match progress {
+                SavedProgress::WillInitiateRestore => {
+                    match &input.strategy {
+                        DownloadStrategy::Warm => {
+                            download_warm(&mut input).run(sender).await?;
+                            break;
+                        }
+                        DownloadStrategy::Cold(cold_input) => {
                             match (async || {
                                 input
                                     .client
-                                    .head_object()
+                                    .restore_object()
                                     .bucket(input.src.bucket)
                                     .key(input.src.object_key)
+                                    .restore_request(
+                                        RestoreRequest::builder()
+                                            .days(1)
+                                            .glacier_job_parameters(
+                                                GlacierJobParameters::builder()
+                                                    .tier(cold_input.tier.clone())
+                                                    .build()
+                                                    // Will always be Ok since we specified tier
+                                                    .unwrap(),
+                                            )
+                                            .build(),
+                                    )
                                     .send()
                                     .await
-                                    .map_err(|e| {
-                                        e.into_maybe_retryable().map(DownloadError::HeadError)
-                                    })
+                                    .map_err(|e| e.into_maybe_retryable())
                             })
                             .keep_retrying(input.retry_interval)
-                            .with(DownloadEvent::CheckStatusError)
+                            .with(DownloadEvent::RestoreError)
                             .run(sender.clone())
-                            .await?
-                            .restore()
+                            .await
                             {
-                                None => break Err(DownloadError::NotRestoringOrRestored),
-                                Some(message) => {
-                                    if message.starts_with("ongoing-request=\"false\"") {
-                                        break Ok(());
-                                    } else if message.starts_with("ongoing-request=\"true\"") {
-                                        sender.send(DownloadEvent::NotYetRestored).await;
+                                Ok(_) => Ok(()),
+                                Err(e) => {
+                                    if let SdkError::ServiceError(e) = &e
+                                        && e.err().meta().code() == Some("RestoreAlreadyInProgress")
+                                    {
+                                        // This is ok, we can just wait for it to be restored
+                                        Ok(())
                                     } else {
-                                        break Err(DownloadError::UnknownRestoreString);
+                                        Err(DownloadError::RestoreError(e))
+                                    }
+                                }
+                            }?;
+                            sender.send(DownloadEvent::RestoreInitiated).await;
+                            progress = SavedProgress::RestoreInitiated(RestoreInitiatedProgress {
+                                last_checked: SystemTime::now(),
+                            });
+                            sender
+                                .send(DownloadEvent::UpdateSavedProgress(progress.clone()))
+                                .await;
+                        }
+                    }
+                }
+                SavedProgress::RestoreInitiated(restore_progress) => match &input.strategy {
+                    DownloadStrategy::Warm => unreachable!(),
+                    DownloadStrategy::Cold(cold_input) => {
+                        match cold_input.wait_for_restore_stratey {
+                            WaitForRestoreStrategy::PollGet(poll_interval) => {
+                                sleep(poll_interval.saturating_sub(
+                                    restore_progress.last_checked.elapsed().unwrap_or_default(),
+                                ))
+                                .await;
+                                match (async || {
+                                    input
+                                        .client
+                                        .head_object()
+                                        .bucket(input.src.bucket)
+                                        .key(input.src.object_key)
+                                        .send()
+                                        .await
+                                        .map_err(|e| {
+                                            e.into_maybe_retryable().map(DownloadError::HeadError)
+                                        })
+                                })
+                                .keep_retrying(input.retry_interval)
+                                .with(DownloadEvent::CheckStatusError)
+                                .run(sender.clone())
+                                .await?
+                                .restore()
+                                {
+                                    None => {
+                                        // The restored object probably expired and became cold again since we restored it.
+                                        // Let's restore it again.
+                                        progress = SavedProgress::WillInitiateRestore;
+                                        sender
+                                            .send(DownloadEvent::UpdateSavedProgress(
+                                                progress.clone(),
+                                            ))
+                                            .await;
+                                    }
+                                    Some(message) => {
+                                        if message.starts_with("ongoing-request=\"false\"") {
+                                            sender.send(DownloadEvent::RestoreComplete).await;
+                                            progress = SavedProgress::RestoreComplete;
+                                            sender
+                                                .send(DownloadEvent::UpdateSavedProgress(
+                                                    progress.clone(),
+                                                ))
+                                                .await;
+                                        } else if message.starts_with("ongoing-request=\"true\"") {
+                                            sender.send(DownloadEvent::NotYetRestored).await;
+                                            progress = SavedProgress::RestoreInitiated(
+                                                RestoreInitiatedProgress {
+                                                    last_checked: SystemTime::now(),
+                                                },
+                                            );
+                                            sender
+                                                .send(DownloadEvent::UpdateSavedProgress(
+                                                    progress.clone(),
+                                                ))
+                                                .await;
+                                        } else {
+                                            break Err(DownloadError::UnknownRestoreString)?;
+                                        }
                                     }
                                 }
                             }
-                        }?;
+                        }
+                    }
+                },
+                SavedProgress::RestoreComplete => {
+                    match download_warm(&mut input).run(sender.clone()).await {
+                        Ok(_) => {
+                            break;
+                        }
+                        Err(e) => {
+                            if let DownloadError::GetObjectError(SdkError::ServiceError(
+                                service_error,
+                            )) = &e
+                                && service_error.err().is_invalid_object_state()
+                            {
+                                // The restored object probably expired and became cold again since we restored it.
+                                // Let's restore it again.
+                                progress = SavedProgress::WillInitiateRestore;
+                                sender
+                                    .send(DownloadEvent::UpdateSavedProgress(progress.clone()))
+                                    .await;
+                            } else {
+                                Err(e)?;
+                            }
+                        }
                     }
                 }
-                sender.send(DownloadEvent::RestoreComplete).await;
-                download_warm(input).run(sender).await?;
             }
         }
         Ok(())

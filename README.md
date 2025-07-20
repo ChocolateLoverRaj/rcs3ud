@@ -25,8 +25,8 @@ Downloads files, restoring archived files.
 - [ ] Specify times to not upload (such as during the day)
 - [ ] Limit monthly upload amounts (if your internet has a monthly limit)
 - [x] Download a file from S3
-- [ ] Download a file from S3 glacier
-- [ ] Resume an upload after the program (or system) restarts
+- [x] Download a file from S3 glacier
+- [x] Resume a download after the program (or system) restarts
 - [ ] Specify a monthly download limit to stay within the AWS Free Tier limit
 - [ ] Reports progress of an upload
 - [x] Reports progress of a download
