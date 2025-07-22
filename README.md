@@ -22,7 +22,7 @@ Downloads files, restoring archived files.
 ## Features (in progress)
 - [x] Upload a file to S3
 - [x] Gracefully handles errors and retries when uploading
-- [ ] Specify times to not upload (such as during the day)
+- [ ] Specify times to upload (so you can upload when you aren't gaming)
 - [ ] Limit monthly upload amounts (if your internet has a monthly limit)
 - [x] Download a file from S3
 - [x] Download a file from S3 glacier
