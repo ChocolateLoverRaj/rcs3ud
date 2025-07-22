@@ -18,11 +18,11 @@ async fn main() {
             storage_class: StorageClass::Standard,
         },
         retry_interval: Duration::from_secs(5),
-        op_time: Box::new(AnyTime),
+        operation_scheduler: Box::new(AnyTime),
     })
     .pin();
-    while let Some(e) = straw.sip().await {
-        println!("Error: {e:#?}. Retrying.");
+    while let Some(event) = straw.sip().await {
+        println!("{event:#?}");
     }
     straw.await.unwrap();
     println!("Uploaded successfully.");

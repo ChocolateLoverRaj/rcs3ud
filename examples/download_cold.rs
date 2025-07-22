@@ -8,7 +8,7 @@ use rcs3ud::{
 };
 use sipper::Sipper;
 use tokio::{
-    fs::File,
+    fs::{File, remove_file},
     io::{AsyncReadExt, AsyncWriteExt},
 };
 
@@ -73,4 +73,5 @@ async fn main() {
     }
     straw.await.unwrap();
     println!("Downloaded successfully.");
+    remove_file(progress_file).await.unwrap();
 }
