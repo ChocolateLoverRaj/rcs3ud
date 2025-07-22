@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::types::StorageClass;
-use rcs3ud::{S3Dest, UploadInput, upload};
+use rcs3ud::{AnyTime, S3Dest, UploadInput, upload};
 use sipper::Sipper;
 
 #[tokio::main]
@@ -18,6 +18,7 @@ async fn main() {
             storage_class: StorageClass::DeepArchive,
         },
         retry_interval: Duration::from_secs(5),
+        op_time: Box::new(AnyTime),
     })
     .pin();
     while let Some(e) = straw.sip().await {

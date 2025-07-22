@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crate::{
+    OpTime,
     maybe_retryable_sdk_error::IntoMaybeRetryable,
     retry::{KeepRetryingExt, MaybeRetryable},
 };
@@ -24,6 +25,7 @@ pub struct UploadInput<'a> {
     pub src: &'a str,
     pub dest: S3Dest<'a>,
     pub retry_interval: Duration,
+    pub op_time: Box<dyn OpTime>,
 }
 
 #[allow(clippy::large_enum_variant)]
