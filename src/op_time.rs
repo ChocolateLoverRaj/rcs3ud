@@ -43,9 +43,10 @@ impl OpTime for TimesOfDay {
 
         let now = UtcDateTime::now();
         let start_time_today = self.intervals.iter().find_map(|interval| {
-            let available_duration = duration_between(interval.start.max(now.time()), interval.end);
+            let start = interval.start.max(now.time());
+            let available_duration = duration_between(start, interval.end);
             if available_duration >= duration {
-                Some(interval.start)
+                Some(now.replace_time(start))
             } else {
                 None
             }
