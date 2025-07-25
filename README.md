@@ -28,5 +28,5 @@ Downloads files, restoring archived files.
 - [x] Download a file from S3 glacier
 - [x] Resume a download after the program (or system) restarts
 - [ ] Specify a monthly download limit to stay within the AWS Free Tier limit
-- [ ] Reports progress of an upload
+- [ ] Reports progress of an upload (currently not possible because of a limitation in the AWS Rust library)
 - [x] Reports progress of a download

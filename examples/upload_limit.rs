@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::types::StorageClass;
-use rcs3ud::{AnyTime, S3Dest, UnlimitedAmountLimiter, UploadInput, upload};
+use rcs3ud::{AnyTime, FileBackedAmountLimiter, S3Dest, UploadInput, upload};
 use sipper::Sipper;
 
 #[tokio::main]
@@ -14,12 +14,16 @@ async fn main() {
         src: "README.md",
         dest: S3Dest {
             bucket: "rcs3ud",
-            object_key: "Cold README.md",
-            storage_class: StorageClass::DeepArchive,
+            object_key: "README.md",
+            storage_class: StorageClass::Standard,
         },
         retry_interval: Duration::from_secs(5),
         operation_scheduler: Box::new(AnyTime),
-        amount_limiter: Box::new(UnlimitedAmountLimiter),
+        amount_limiter: Box::new(FileBackedAmountLimiter::new(
+            "internet_usage.ron",
+            2000,
+            "Example: Upload README.md",
+        )),
     })
     .pin();
     while let Some(event) = straw.sip().await {
