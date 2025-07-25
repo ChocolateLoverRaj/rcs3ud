@@ -23,7 +23,7 @@ Downloads files, restoring archived files.
 - [x] Upload a file to S3
 - [x] Gracefully handles errors and retries when uploading
 - [x] Specify times to upload (so you can upload when you aren't gaming)
-- [ ] Limit monthly upload amounts (if your internet has a monthly limit)
+- [x] Limit monthly upload amounts (if your internet has a monthly limit)
 - [x] Download a file from S3
 - [x] Download a file from S3 glacier
 - [x] Resume a download after the program (or system) restarts
