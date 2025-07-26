@@ -38,6 +38,10 @@ Downloads files, restoring archived files.
 - [ ] Mechanism to stay within the AWS Free Tier limit for data out from AWS (planned)
 - [x] Limit monthly download amounts (if your internet has a monthly limit)
 - [ ] Download a large file that's stored as multiple S3 objects (planned)
+- [ ] When downloading a restored object, copies the object to a `STANDARD` tier object if the restore is about to expire (planned)
+- [ ] Schedules a restored object to be automatically copied to a `STANDARD` tier object before the restore expires, as a S3 job, so that even if your program doesn't run locally, the object will be copied (could be implemented)
+- [ ] Use AWS SQS to cheaply frequently poll for an object being restored (could be implemented)
+- [ ] Use AWS SNS to send a REST request to a local server when an object is restored (could be implemented)
 
 ## Why no multi-part uploads
 This tool was created to upload (and if needed, download) backups of ZFS datasets, which could be up to 700 GB in size, into the AWS `DEEP_ARCHIVE` tier. `DEEP_ARCHIVE` is cheap to store ($1/TB/month in 2025), but if you use multi-part uploads, the upload cost will be huge because you will be billed at the `STANDARD` tier while your upload is in progress, and it will take a **long** time to upload 700 GB. Also when restoring it will be very expensive because every time you need to download a chunk of the object, you will need to have the entire object restored, which again is charged at the `STANDARD` tier, plus there would be extra restore costs.
