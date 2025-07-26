@@ -6,11 +6,11 @@ use crate::{
     retry::{KeepRetryingExt, MaybeRetryable},
 };
 use aws_sdk_s3::{
-    error::SdkError,
-    operation::put_object::PutObjectError,
-    primitives::{ByteStream, ByteStreamError},
+    error::SdkError, operation::put_object::PutObjectError, primitives::ByteStream,
     types::StorageClass,
 };
+use bytes::Bytes;
+use futures::{future::BoxFuture, stream::BoxStream};
 use sipper::{Sipper, Straw, sipper};
 use thiserror::Error;
 use time::UtcDateTime;
@@ -22,9 +22,20 @@ pub struct S3Dest<'a> {
     pub storage_class: StorageClass,
 }
 
+pub trait UploadSrcStream {
+    fn get_stream(
+        &self,
+    ) -> BoxFuture<Result<BoxStream<'static, Result<Bytes, io::Error>>, io::Error>>;
+}
+
+pub struct UploadSrc {
+    pub stream: Box<dyn UploadSrcStream>,
+    pub len: usize,
+}
+
 pub struct UploadInput<'a> {
     pub client: &'a aws_sdk_s3::Client,
-    pub src: &'a str,
+    pub src: UploadSrc,
     pub dest: S3Dest<'a>,
     pub retry_interval: Duration,
     pub operation_scheduler: Box<dyn OperationScheduler>,
@@ -37,11 +48,11 @@ pub struct UploadInput<'a> {
 #[derive(Debug, Error)]
 pub enum UploadError {
     #[error("Error getting file metadata")]
-    MetadatError(io::Error),
-    #[error("Error with input file")]
-    ByteStream(ByteStreamError),
+    Metadata(io::Error),
+    #[error("Error getting upload stream")]
+    UploadStream(io::Error),
     #[error("Error uploading file")]
-    PutObjectError(SdkError<PutObjectError>),
+    PutObject(SdkError<PutObjectError>),
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -49,7 +60,7 @@ pub enum UploadError {
 pub enum UploadEvent {
     ReadingMetadata,
     ReservingUploadAmount,
-    CreatingByteStream,
+    GettingUploadStream,
     ScheduledStart(UtcDateTime),
     StartingUpload,
     UploadError(SdkError<PutObjectError>),
@@ -61,18 +72,10 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
             let mut sender = sender.clone();
             let id = format!("upload:{}/{}", input.dest.bucket, input.dest.object_key);
             sender.send(UploadEvent::ReadingMetadata).await;
-            let bytes_to_upload = tokio::fs::metadata(input.src)
-                .await
-                .map_err(UploadError::MetadatError)?
-                .len() as usize;
             async move || {
                 sender.send(UploadEvent::ReservingUploadAmount).await;
-                let reservation = input.amount_limiter.reserve(bytes_to_upload, &id).await;
-                sender.send(UploadEvent::CreatingByteStream).await;
-                let byte_stream = ByteStream::from_path(input.src)
-                    .await
-                    .map_err(|e| MaybeRetryable::NotRetryable(UploadError::ByteStream(e)))?;
-                match input.operation_scheduler.get_start_time(bytes_to_upload) {
+                let reservation = input.amount_limiter.reserve(input.src.len, &id).await;
+                match input.operation_scheduler.get_start_time(input.src.len) {
                     StartTime::Now => {}
                     StartTime::Later(time) => {
                         sender.send(UploadEvent::ScheduledStart(time)).await;
@@ -85,14 +88,25 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
                         }
                     }
                 };
+                sender.send(UploadEvent::GettingUploadStream).await;
+                let stream = input
+                    .src
+                    .stream
+                    .get_stream()
+                    .await
+                    .map_err(|e| MaybeRetryable::NotRetryable(UploadError::UploadStream(e)))?;
                 sender.send(UploadEvent::StartingUpload).await;
                 match input
                     .client
+                    // TODO: Compute checksum so we don't forget, or end up with a DEEP_ARCHIVE object which is corrupted
                     .put_object()
                     .bucket(input.dest.bucket)
                     .key(input.dest.object_key)
                     .storage_class(input.dest.storage_class.clone())
-                    .body(byte_stream)
+                    .body(ByteStream::from_body_1_x(reqwest::Body::wrap_stream(
+                        stream,
+                    )))
+                    .content_length(input.src.len.try_into().unwrap())
                     .send()
                     .await
                 {
@@ -100,7 +114,7 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
                         reservation.mark_complete().await;
                         Ok(output)
                     }
-                    Err(e) => Err(e.into_maybe_retryable().map(UploadError::PutObjectError)),
+                    Err(e) => Err(e.into_maybe_retryable().map(UploadError::PutObject)),
                 }
             }
         })

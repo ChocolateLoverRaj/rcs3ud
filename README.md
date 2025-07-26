@@ -25,6 +25,7 @@ Downloads files, restoring archived files.
 
 ### Upload
 - [x] Upload files within the limit (5GB for AWS)
+- [x] Upload from custom `Stream`s
 - [x] Specify times to upload (so you can upload when you aren't gaming)
 - [x] Limit monthly upload amounts (if your internet has a monthly limit)
 - [ ] Reports progress (currently not possible because of a limitation in the AWS Rust library)
@@ -32,7 +33,6 @@ Downloads files, restoring archived files.
 
 ### Download
 - [x] Resume a download operation after the program (or system) restarts
-- [ ] Resume partially downloaded files (not planned because this would be too complicated in the event of an OS crash)
 - [x] Download from cold storage
 - [x] Reports progress
 - [ ] Mechanism to stay within the AWS Free Tier limit for data out from AWS (planned)

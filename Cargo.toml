@@ -6,17 +6,21 @@ edition = "2024"
 [dependencies]
 aws-sdk-s3 = "1.97.0"
 aws-smithy-runtime-api = "1.8.3"
+bytes = "1.10.1"
 dyn-clone = "1.0.19"
 fs4 = { version = "0.13.1", features = ["tokio"] }
 futures = "0.3.31"
 notify = "8.1.0"
 ordermap = { version = "0.5.8", features = ["serde"] }
+reqwest = { version = "0.12.22", default-features = false, features = ["stream"] }
 ron = "0.10.1"
 serde = { version = "1.0.219", features = ["derive"] }
 sipper = "0.1.0"
 thiserror = "2.0.12"
 time = { version = "0.3.41", features = ["serde"] }
 tokio = { version = "1.46.1", features = ["fs"] }
+tokio-stream = { version = "0.1.17", features = ["fs"] }
+tokio-util = "0.7.15"
 
 [dev-dependencies]
 aws-config = "1.8.2"
