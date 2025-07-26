@@ -53,6 +53,7 @@ async fn main() {
                 },
             }
         },
+        amount_limiter: None,
     })
     .await
     .pin();

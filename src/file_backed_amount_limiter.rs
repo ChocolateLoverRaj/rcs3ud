@@ -140,6 +140,10 @@ impl DataFile {
             .map_err(WriteAndCloseError::Unlock)?;
         Ok(())
     }
+
+    pub async fn close(self) -> io::Result<()> {
+        self.file.unlock_async().await
+    }
 }
 
 impl AmountLimiter for FileBackedAmountLimiter<'_> {
@@ -157,16 +161,18 @@ impl AmountLimiter for FileBackedAmountLimiter<'_> {
             });
             file.write_and_close(&data).await.unwrap();
             loop {
-                let (_file, data) = DataFile::open_and_read(self.path).await.unwrap();
-                let already_used = data.used_this_month
-                    + data.queue[..data.queue.get_index_of(id).unwrap()]
-                        .iter()
-                        .map(|(_, item)| item.amount)
-                        .sum::<usize>();
-                let months_to_wait = (already_used + len) / self.limit;
-                if months_to_wait == 0 {
+                let (file, data) = DataFile::open_and_read(self.path).await.unwrap();
+                file.close().await.unwrap();
+                let queue_total = data.queue[..data.queue.get_index_of(id).unwrap()]
+                    .iter()
+                    .map(|(_, item)| item.amount)
+                    .sum::<usize>();
+                if data.used_this_month + queue_total + len <= self.limit {
                     break;
                 } else {
+                    // Even if we used more data than allotted this month, we just have to wait for this month to be over and then our limit resets.
+                    // So after waiting that month, we just need to let the items before us in the queue complete.
+                    let months_to_wait = 1 + (queue_total + len) / self.limit;
                     // It's not *guaranteed* that after that time it will be our turn again, because a process could end up using its reserved data in the next month.
                     let now = UtcDateTime::now();
                     let time_to_re_check = {
@@ -185,6 +191,24 @@ impl AmountLimiter for FileBackedAmountLimiter<'_> {
                 limiter: self.clone(),
                 id,
             }) as Box<dyn AmountReservation>
+        }
+        .boxed()
+    }
+
+    fn get_reservation<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> BoxFuture<'a, Option<Box<dyn AmountReservation + 'a>>> {
+        async {
+            let (_file, data) = DataFile::open_and_read(self.path).await.unwrap();
+            if data.queue.contains_key(id) {
+                Some(Box::new(FileBackedAmountReservation {
+                    limiter: self.clone(),
+                    id,
+                }) as Box<dyn AmountReservation>)
+            } else {
+                None
+            }
         }
         .boxed()
     }

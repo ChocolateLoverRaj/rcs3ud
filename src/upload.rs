@@ -59,7 +59,7 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
     sipper(async move |sender| {
         ({
             let mut sender = sender.clone();
-            let id = format!("{}/{}", input.dest.bucket, input.dest.object_key);
+            let id = format!("upload:{}/{}", input.dest.bucket, input.dest.object_key);
             sender.send(UploadEvent::ReadingMetadata).await;
             let bytes_to_upload = tokio::fs::metadata(input.src)
                 .await

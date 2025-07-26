@@ -4,7 +4,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::retry::KeepRetryingExt;
+use crate::{AmountLimiter, retry::KeepRetryingExt};
 use aws_sdk_s3::{
     error::SdkError,
     operation::{
@@ -53,12 +53,25 @@ pub struct RestoreInitiatedProgress {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub enum SavedProgress {
+pub enum DownloadStage {
     #[default]
     WillInitiateRestore,
     RestoreInitiated(RestoreInitiatedProgress),
     /// The file is ready to download or downloading
     RestoreComplete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedReservation {
+    amount: usize,
+    /// Will be false if program terminated after getting object len but before reserving
+    reserved: bool,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct SavedProgress {
+    reservation: Option<SavedReservation>,
+    stage: DownloadStage,
 }
 
 pub struct DownloadInput<'a> {
@@ -67,7 +80,10 @@ pub struct DownloadInput<'a> {
     pub dest: &'a mut tokio::fs::File,
     pub strategy: DownloadStrategy,
     pub retry_interval: Duration,
+    /// It is recommended to save progress when downloading cold objects.
+    /// Otherwise you can set this to `Default::default()`.
     pub saved_progress: SavedProgress,
+    pub amount_limiter: Option<Box<dyn AmountLimiter>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -102,6 +118,9 @@ pub struct DownloadProgress {
 
 #[derive(Debug)]
 pub enum DownloadEvent {
+    GettingObjectLen,
+    ReservingDownloadAmount,
+    CheckObjectLenError(SdkError<HeadObjectError>),
     DownloadError(SdkError<GetObjectError>),
     DownloadProgress(DownloadProgress),
     RestoreError(SdkError<RestoreObjectError>),
@@ -112,6 +131,7 @@ pub enum DownloadEvent {
     RestoreComplete,
     CheckStatusError(SdkError<HeadObjectError>),
     UpdateSavedProgress(SavedProgress),
+    MarkingReservationComplete,
 }
 
 fn download_warm(input: &mut DownloadInput<'_>) -> impl Straw<(), DownloadEvent, DownloadError> {
@@ -163,13 +183,51 @@ pub async fn download(
     mut input: DownloadInput<'_>,
 ) -> impl Straw<(), DownloadEvent, DownloadError> {
     sipper(async move |mut sender| {
+        let amount_limiter = input.amount_limiter.clone();
+        let id = format!("download:{}/{}", input.src.bucket, input.src.object_key);
+        let reservation = if let Some(amount_limiter) = &amount_limiter {
+            Some({
+                if let Some(reservation) = &input.saved_progress.reservation {
+                    if let Some(reservation) = amount_limiter.get_reservation(&id).await {
+                        reservation
+                    } else {
+                        sender.send(DownloadEvent::ReservingDownloadAmount).await;
+                        amount_limiter.reserve(reservation.amount, &id).await
+                    }
+                } else {
+                    sender.send(DownloadEvent::GettingObjectLen).await;
+                    let len: usize = (async || {
+                        input
+                            .client
+                            .head_object()
+                            .bucket(input.src.bucket)
+                            .key(input.src.object_key)
+                            .send()
+                            .await
+                            .map_err(|e| e.into_maybe_retryable().map(DownloadError::HeadError))
+                    })
+                    .keep_retrying(input.retry_interval)
+                    .with(DownloadEvent::CheckObjectLenError)
+                    .run(sender.clone())
+                    .await?
+                    .content_length()
+                    .unwrap()
+                    .try_into()
+                    .unwrap();
+                    sender.send(DownloadEvent::ReservingDownloadAmount).await;
+                    amount_limiter.reserve(len, &id).await
+                }
+            })
+        } else {
+            None
+        };
         let mut progress = input.saved_progress.clone();
         loop {
-            match progress {
-                SavedProgress::WillInitiateRestore => {
+            match progress.stage {
+                DownloadStage::WillInitiateRestore => {
                     match &input.strategy {
                         DownloadStrategy::Warm => {
-                            download_warm(&mut input).run(sender).await?;
+                            download_warm(&mut input).run(sender.clone()).await?;
                             break;
                         }
                         DownloadStrategy::Cold(cold_input) => {
@@ -213,16 +271,17 @@ pub async fn download(
                                 }
                             }?;
                             sender.send(DownloadEvent::RestoreInitiated).await;
-                            progress = SavedProgress::RestoreInitiated(RestoreInitiatedProgress {
-                                last_checked: SystemTime::now(),
-                            });
+                            progress.stage =
+                                DownloadStage::RestoreInitiated(RestoreInitiatedProgress {
+                                    last_checked: SystemTime::now(),
+                                });
                             sender
                                 .send(DownloadEvent::UpdateSavedProgress(progress.clone()))
                                 .await;
                         }
                     }
                 }
-                SavedProgress::RestoreInitiated(restore_progress) => match &input.strategy {
+                DownloadStage::RestoreInitiated(restore_progress) => match &input.strategy {
                     DownloadStrategy::Warm => unreachable!(),
                     DownloadStrategy::Cold(cold_input) => {
                         match cold_input.wait_for_restore_stratey {
@@ -252,7 +311,7 @@ pub async fn download(
                                     None => {
                                         // The restored object probably expired and became cold again since we restored it.
                                         // Let's restore it again.
-                                        progress = SavedProgress::WillInitiateRestore;
+                                        progress.stage = DownloadStage::WillInitiateRestore;
                                         sender
                                             .send(DownloadEvent::UpdateSavedProgress(
                                                 progress.clone(),
@@ -262,7 +321,7 @@ pub async fn download(
                                     Some(message) => {
                                         if message.starts_with("ongoing-request=\"false\"") {
                                             sender.send(DownloadEvent::RestoreComplete).await;
-                                            progress = SavedProgress::RestoreComplete;
+                                            progress.stage = DownloadStage::RestoreComplete;
                                             sender
                                                 .send(DownloadEvent::UpdateSavedProgress(
                                                     progress.clone(),
@@ -270,7 +329,7 @@ pub async fn download(
                                                 .await;
                                         } else if message.starts_with("ongoing-request=\"true\"") {
                                             sender.send(DownloadEvent::NotYetRestored).await;
-                                            progress = SavedProgress::RestoreInitiated(
+                                            progress.stage = DownloadStage::RestoreInitiated(
                                                 RestoreInitiatedProgress {
                                                     last_checked: SystemTime::now(),
                                                 },
@@ -289,7 +348,7 @@ pub async fn download(
                         }
                     }
                 },
-                SavedProgress::RestoreComplete => {
+                DownloadStage::RestoreComplete => {
                     match download_warm(&mut input).run(sender.clone()).await {
                         Ok(_) => {
                             break;
@@ -302,7 +361,7 @@ pub async fn download(
                             {
                                 // The restored object probably expired and became cold again since we restored it.
                                 // Let's restore it again.
-                                progress = SavedProgress::WillInitiateRestore;
+                                progress.stage = DownloadStage::WillInitiateRestore;
                                 sender
                                     .send(DownloadEvent::UpdateSavedProgress(progress.clone()))
                                     .await;
@@ -313,6 +372,10 @@ pub async fn download(
                     }
                 }
             }
+        }
+        if let Some(reservation) = reservation {
+            sender.send(DownloadEvent::MarkingReservationComplete).await;
+            reservation.mark_complete().await;
         }
         Ok(())
     })

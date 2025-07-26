@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 aws-sdk-s3 = "1.97.0"
 aws-smithy-runtime-api = "1.8.3"
+dyn-clone = "1.0.19"
 fs4 = { version = "0.13.1", features = ["tokio"] }
 futures = "0.3.31"
 notify = "8.1.0"

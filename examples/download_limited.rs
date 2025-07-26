@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use aws_config::BehaviorVersion;
-use rcs3ud::{DownloadInput, DownloadStrategy, S3Src, download};
+use rcs3ud::{DownloadInput, DownloadStrategy, FileBackedAmountLimiter, S3Src, download};
 use sipper::Sipper;
 use tokio::fs::File;
 
@@ -26,7 +26,11 @@ async fn main() {
         strategy: DownloadStrategy::Warm,
         retry_interval: Duration::from_secs(5),
         saved_progress: Default::default(),
-        amount_limiter: None,
+        amount_limiter: Some(Box::new(FileBackedAmountLimiter::new(
+            "internet_usage.ron",
+            2000,
+            "Example: Download README.md",
+        ))),
     })
     .await
     .pin();
