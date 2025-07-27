@@ -25,6 +25,7 @@ async fn main() {
             5_000_000.0,
         )),
         amount_limiter: Box::new(UnlimitedAmountLimiter),
+        tagging: Default::default(),
     })
     .pin();
     while let Some(event) = straw.sip().await {

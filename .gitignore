@@ -29,3 +29,4 @@ target
 Downloaded README.md
 download_cold_progress.ron
 internet_usage.ron
+upload_large_file_progress.ron

@@ -23,6 +23,7 @@ async fn main() {
         retry_interval: Duration::from_secs(5),
         operation_scheduler: Box::new(AnyTime),
         amount_limiter: Box::new(UnlimitedAmountLimiter),
+        tagging: Default::default(),
     })
     .pin();
     while let Some(event) = straw.sip().await {

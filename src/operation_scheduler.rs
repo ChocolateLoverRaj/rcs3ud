@@ -1,5 +1,6 @@
 use std::{ops::Range, time::Duration};
 
+use dyn_clone::DynClone;
 use time::{Date, Time, UtcDateTime};
 
 pub enum StartTime {
@@ -7,10 +8,13 @@ pub enum StartTime {
     Later(UtcDateTime),
 }
 
-pub trait OperationScheduler {
+pub trait OperationScheduler: DynClone {
     fn get_start_time(&self, bytes_to_upload: usize) -> StartTime;
 }
 
+dyn_clone::clone_trait_object!(OperationScheduler);
+
+#[derive(Debug, Clone)]
 pub struct AnyTime;
 impl OperationScheduler for AnyTime {
     fn get_start_time(&self, _bytes_to_upload: usize) -> StartTime {
@@ -18,6 +22,7 @@ impl OperationScheduler for AnyTime {
     }
 }
 
+#[derive(Debug, Clone)]
 /// Does the operation at a time interval.
 /// If there is no time interval that can fit the operation, the largest time interval is used
 /// and the operation will continue running past the end of the largest time interval.

@@ -24,6 +24,7 @@ async fn main() {
             2000,
             "Example: Upload README.md",
         )),
+        tagging: Default::default(),
     })
     .pin();
     while let Some(event) = straw.sip().await {

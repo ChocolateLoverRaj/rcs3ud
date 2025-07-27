@@ -2,7 +2,7 @@ use dyn_clone::DynClone;
 use futures::future::BoxFuture;
 use sipper::FutureExt;
 
-pub trait AmountLimiter: DynClone {
+pub trait AmountLimiter: DynClone + Send {
     /// This function is called before uploading or downloading.
     /// When this function resolves, it says, "Ok, you can upload/download now".
     fn reserve<'a>(

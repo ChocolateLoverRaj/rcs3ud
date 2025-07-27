@@ -29,7 +29,7 @@ Downloads files, restoring archived files.
 - [x] Specify times to upload (so you can upload when you aren't gaming)
 - [x] Limit monthly upload amounts (if your internet has a monthly limit)
 - [ ] Reports progress (currently not possible because of a limitation in the AWS Rust library)
-- [ ] Upload a large file as multiple S3 objects (planned)
+- [x] Upload a large file as multiple S3 objects
 
 ### Download
 - [x] Resume a download operation after the program (or system) restarts

@@ -42,6 +42,7 @@ pub struct UploadInput<'a> {
     /// Note that if an upload fails in the middle of uploading, we don't know how much data was actually uploaded.
     /// So we assume that the entire file len was uploaded before the operation failed.
     pub amount_limiter: Box<dyn AmountLimiter>,
+    pub tagging: &'a str,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -58,7 +59,6 @@ pub enum UploadError {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum UploadEvent {
-    ReadingMetadata,
     ReservingUploadAmount,
     GettingUploadStream,
     ScheduledStart(UtcDateTime),
@@ -71,7 +71,6 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
         ({
             let mut sender = sender.clone();
             let id = format!("upload:{}/{}", input.dest.bucket, input.dest.object_key);
-            sender.send(UploadEvent::ReadingMetadata).await;
             async move || {
                 sender.send(UploadEvent::ReservingUploadAmount).await;
                 let reservation = input.amount_limiter.reserve(input.src.len, &id).await;
@@ -107,6 +106,7 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
                         stream,
                     )))
                     .content_length(input.src.len.try_into().unwrap())
+                    .tagging(input.tagging)
                     .send()
                     .await
                 {
