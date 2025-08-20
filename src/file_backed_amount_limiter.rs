@@ -37,13 +37,13 @@ struct FileData<'a> {
 /// Limit gets reset at the start of every month (UTC).
 #[derive(Debug, Clone)]
 pub struct FileBackedAmountLimiter<'a> {
-    path: &'a str,
+    path: Cow<'a, str>,
     limit: usize,
-    description: &'a str,
+    description: Cow<'a, str>,
 }
 
 impl<'a> FileBackedAmountLimiter<'a> {
-    pub fn new(path: &'a str, limit: usize, description: &'a str) -> Self {
+    pub fn new(path: Cow<'a, str>, limit: usize, description: Cow<'a, str>) -> Self {
         Self {
             path,
             limit,
@@ -153,21 +153,22 @@ impl AmountLimiter for FileBackedAmountLimiter<'_> {
         id: &'a str,
     ) -> BoxFuture<'a, Box<dyn AmountReservation + 'a>> {
         async move {
-            let (file, mut data) = DataFile::open_and_read(self.path).await.unwrap();
+            let (file, mut data) = DataFile::open_and_read(self.path.as_ref()).await.unwrap();
             data.queue.entry(id.into()).or_insert(QueueItem {
-                description: self.description.into(),
+                description: self.description.clone(),
                 amount: len,
                 time_added: UtcDateTime::now(),
             });
             file.write_and_close(&data).await.unwrap();
             loop {
-                let (file, data) = DataFile::open_and_read(self.path).await.unwrap();
+                let (file, data) = DataFile::open_and_read(self.path.as_ref()).await.unwrap();
                 file.close().await.unwrap();
                 let queue_total = data.queue[..data.queue.get_index_of(id).unwrap()]
                     .iter()
                     .map(|(_, item)| item.amount)
                     .sum::<usize>();
-                if data.used_this_month + queue_total + len <= self.limit {
+                // "Stretch" the limit if it would be impossible to do the operation with the specified limit
+                if data.used_this_month + queue_total + len <= self.limit.max(len) {
                     break;
                 } else {
                     // Even if we used more data than allotted this month, we just have to wait for this month to be over and then our limit resets.
@@ -200,7 +201,7 @@ impl AmountLimiter for FileBackedAmountLimiter<'_> {
         id: &'a str,
     ) -> BoxFuture<'a, Option<Box<dyn AmountReservation + 'a>>> {
         async {
-            let (_file, data) = DataFile::open_and_read(self.path).await.unwrap();
+            let (_file, data) = DataFile::open_and_read(self.path.as_ref()).await.unwrap();
             if data.queue.contains_key(id) {
                 Some(Box::new(FileBackedAmountReservation {
                     limiter: self.clone(),
@@ -222,7 +223,9 @@ pub struct FileBackedAmountReservation<'a> {
 impl AmountReservation for FileBackedAmountReservation<'_> {
     fn mark_complete(&self) -> BoxFuture<()> {
         async {
-            let (file, mut data) = DataFile::open_and_read(self.limiter.path).await.unwrap();
+            let (file, mut data) = DataFile::open_and_read(self.limiter.path.as_ref())
+                .await
+                .unwrap();
             let item = data.queue.remove(self.id).unwrap();
             data.used_this_month += item.amount;
             file.write_and_close(&data).await.unwrap();

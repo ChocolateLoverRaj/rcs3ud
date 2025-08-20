@@ -43,6 +43,9 @@ Downloads files, restoring archived files.
 - [ ] Use AWS SQS to cheaply frequently poll for an object being restored (could be implemented)
 - [ ] Use AWS SNS to send a REST request to a local server when an object is restored (could be implemented)
 
+## CLI
+For my own use (and of course it will be helpful for others too), I made a CLI for it. It currently is "in beta", so it doesn't have all of the features and checks. Hopefully I won't ever have to download it, so I may never make a download CLI command (but feel free to contribute it).
+
 ## Why no multi-part uploads
 This tool was created to upload (and if needed, download) backups of ZFS datasets, which could be up to 700 GB in size, into the AWS `DEEP_ARCHIVE` tier. `DEEP_ARCHIVE` is cheap to store ($1/TB/month in 2025), but if you use multi-part uploads, the upload cost will be huge because you will be billed at the `STANDARD` tier while your upload is in progress, and it will take a **long** time to upload 700 GB. Also when restoring it will be very expensive because every time you need to download a chunk of the object, you will need to have the entire object restored, which again is charged at the `STANDARD` tier, plus there would be extra restore costs.
 

@@ -27,9 +27,9 @@ async fn main() {
         retry_interval: Duration::from_secs(5),
         saved_progress: Default::default(),
         amount_limiter: Some(Box::new(FileBackedAmountLimiter::new(
-            "internet_usage.ron",
+            "internet_usage.ron".into(),
             2000,
-            "Example: Download README.md",
+            "Example: Download README.md".into(),
         ))),
     })
     .await

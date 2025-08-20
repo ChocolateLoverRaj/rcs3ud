@@ -3,6 +3,9 @@ name = "rcs3ud"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["rcs3ud_cli"]
+
 [dependencies]
 aws-sdk-s3 = "1.97.0"
 aws-smithy-runtime-api = "1.8.3"
@@ -12,7 +15,9 @@ fs4 = { version = "0.13.1", features = ["tokio"] }
 futures = "0.3.31"
 notify = "8.1.0"
 ordermap = { version = "0.5.8", features = ["serde"] }
-reqwest = { version = "0.12.22", default-features = false, features = ["stream"] }
+reqwest = { version = "0.12.22", default-features = false, features = [
+    "stream",
+] }
 ron = "0.10.1"
 serde = { version = "1.0.219", features = ["derive"] }
 sipper = "0.1.0"

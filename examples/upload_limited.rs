@@ -20,9 +20,9 @@ async fn main() {
         retry_interval: Duration::from_secs(5),
         operation_scheduler: Box::new(AnyTime),
         amount_limiter: Box::new(FileBackedAmountLimiter::new(
-            "internet_usage.ron",
+            "internet_usage.ron".into(),
             2000,
-            "Example: Upload README.md",
+            "Example: Upload README.md".into(),
         )),
         tagging: Default::default(),
     })
