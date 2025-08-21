@@ -142,15 +142,22 @@ impl UploadSrcStream for FilePartStream {
             let mut file = File::open(&self.path).await?;
             file.seek(SeekFrom::Start(self.range.start.try_into().unwrap()))
                 .await?;
-            Ok(stream::try_unfold(file, async |mut file| {
-                let mut b = BytesMut::new();
-                let count = file.read_buf(&mut b).await?;
-                Ok(if count > 0 {
-                    Some((b.into(), file))
-                } else {
-                    None
-                })
-            })
+            Ok(stream::try_unfold(
+                (file, self.range.start, self.range.end),
+                async move |(mut file, position, end)| {
+                    let bytes_left = end - position;
+                    let mut b = BytesMut::with_capacity(1024.min(bytes_left));
+                    let count = file.read_buf(&mut b).await?;
+                    Ok(if count > 0 {
+                        let chunk_len = count.min(bytes_left);
+                        b.truncate(chunk_len);
+                        // println!("Chunk len: {chunk_len}");
+                        Some((b.into(), (file, position + chunk_len, end)))
+                    } else {
+                        None
+                    })
+                },
+            )
             .boxed())
         }
         .boxed()
