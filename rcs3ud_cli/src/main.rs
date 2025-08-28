@@ -130,7 +130,7 @@ async fn main() {
                 .pin();
                 while let Some(event) = straw.sip().await {
                     println!("{event:#?}");
-                    if let UploadChunkedEvent::SaveProgres(saved_progress) = event {
+                    if let UploadChunkedEvent::SaveProgress(saved_progress) = event {
                         File::options()
                             .create(true)
                             .truncate(true)

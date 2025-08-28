@@ -1,24 +1,18 @@
 use std::{
-    io::{self, SeekFrom},
+    io::{self},
     num::NonZeroUsize,
-    ops::Range,
     path::PathBuf,
     time::Duration,
 };
 
-use bytes::BytesMut;
-use futures::stream;
 use serde::{Deserialize, Serialize};
-use sipper::{FutureExt, Sipper, Straw, StreamExt, sipper};
+use sipper::{Sipper, Straw, sipper};
 use thiserror::Error;
-use tokio::{
-    fs::{File, metadata},
-    io::{AsyncReadExt, AsyncSeekExt},
-};
+use tokio::fs::metadata;
 
 use crate::{
     AmountLimiter, OperationScheduler, S3Dest, UploadError, UploadEvent, UploadInput, UploadSrc,
-    UploadSrcStream, upload,
+    upload,
 };
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -54,7 +48,7 @@ pub enum UploadChunkedError {
 pub enum UploadChunkedEvent {
     GettingMetadata,
     StartingChunk(usize),
-    SaveProgres(UploadChunkedProgress),
+    SaveProgress(UploadChunkedProgress),
     UploadEvent(UploadEvent),
 }
 
@@ -75,7 +69,7 @@ pub fn upload_chunked(
                 .unwrap();
             progress.len = Some(len);
             sender
-                .send(UploadChunkedEvent::SaveProgres(progress.clone()))
+                .send(UploadChunkedEvent::SaveProgress(progress.clone()))
                 .await;
             len
         };
@@ -96,13 +90,8 @@ pub fn upload_chunked(
                         .min(input.chunk_size.get());
                     UploadSrc {
                         len,
-                        stream: Box::new(FilePartStream {
-                            path: input.src.clone(),
-                            range: {
-                                let start = progress.parts_uploaded * input.chunk_size.get();
-                                start..start + len
-                            },
-                        }),
+                        path: input.src.clone(),
+                        offset: progress.parts_uploaded * input.chunk_size.get(),
                     }
                 },
                 tagging: &format!(
@@ -120,46 +109,9 @@ pub fn upload_chunked(
             .map_err(UploadChunkedError::Upload)?;
             progress.parts_uploaded += 1;
             sender
-                .send(UploadChunkedEvent::SaveProgres(progress.clone()))
+                .send(UploadChunkedEvent::SaveProgress(progress.clone()))
                 .await;
         }
         Ok(())
     })
-}
-
-pub struct FilePartStream {
-    path: PathBuf,
-    range: Range<usize>,
-}
-
-impl UploadSrcStream for FilePartStream {
-    fn get_stream(
-        &self,
-    ) -> futures::future::BoxFuture<
-        Result<stream::BoxStream<'static, Result<bytes::Bytes, io::Error>>, io::Error>,
-    > {
-        async {
-            let mut file = File::open(&self.path).await?;
-            file.seek(SeekFrom::Start(self.range.start.try_into().unwrap()))
-                .await?;
-            Ok(stream::try_unfold(
-                (file, self.range.start, self.range.end),
-                async move |(mut file, position, end)| {
-                    let bytes_left = end - position;
-                    let mut b = BytesMut::with_capacity(1024.min(bytes_left));
-                    let count = file.read_buf(&mut b).await?;
-                    Ok(if count > 0 {
-                        let chunk_len = count.min(bytes_left);
-                        b.truncate(chunk_len);
-                        // println!("Chunk len: {chunk_len}");
-                        Some((b.into(), (file, position + chunk_len, end)))
-                    } else {
-                        None
-                    })
-                },
-            )
-            .boxed())
-        }
-        .boxed()
-    }
 }

@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, num::NonZero, path::PathBuf, str::FromStr, time::Duration};
 
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::{config::RequestChecksumCalculation, types::StorageClass};
+use aws_sdk_s3::types::StorageClass;
 use rcs3ud::{
     AnyTime, S3Dest, UnlimitedAmountLimiter, UploadChunkedEvent, UploadChunkedInput,
     UploadChunkedProgress, upload_chunked,
@@ -14,10 +14,7 @@ use tokio::{
 
 #[tokio::main]
 async fn main() {
-    let config = aws_config::defaults(BehaviorVersion::latest())
-        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-        .load()
-        .await;
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let client = aws_sdk_s3::Client::new(&config);
     // let operation_scheduler =  as Box<dyn OperationScheduler>;
     // let amount_limiter =  as Box<dyn AmountLimiter>;
@@ -52,7 +49,7 @@ async fn main() {
     .pin();
     while let Some(event) = straw.sip().await {
         println!("{event:#?}");
-        if let UploadChunkedEvent::SaveProgres(saved_progress) = event {
+        if let UploadChunkedEvent::SaveProgress(saved_progress) = event {
             File::options()
                 .create(true)
                 .truncate(true)

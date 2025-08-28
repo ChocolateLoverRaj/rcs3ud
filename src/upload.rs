@@ -1,4 +1,4 @@
-use std::{io, time::Duration};
+use std::{io, path::PathBuf, time::Duration};
 
 use crate::{
     AmountLimiter, OperationScheduler, StartTime,
@@ -6,11 +6,11 @@ use crate::{
     retry::{KeepRetryingExt, MaybeRetryable},
 };
 use aws_sdk_s3::{
-    error::SdkError, operation::put_object::PutObjectError, primitives::ByteStream,
+    error::SdkError,
+    operation::put_object::PutObjectError,
+    primitives::{ByteStreamError, FsBuilder, Length},
     types::StorageClass,
 };
-use bytes::Bytes;
-use futures::{future::BoxFuture, stream::BoxStream};
 use sipper::{Sipper, Straw, sipper};
 use thiserror::Error;
 use time::UtcDateTime;
@@ -22,14 +22,9 @@ pub struct S3Dest<'a> {
     pub storage_class: StorageClass,
 }
 
-pub trait UploadSrcStream {
-    fn get_stream(
-        &self,
-    ) -> BoxFuture<Result<BoxStream<'static, Result<Bytes, io::Error>>, io::Error>>;
-}
-
 pub struct UploadSrc {
-    pub stream: Box<dyn UploadSrcStream>,
+    pub path: PathBuf,
+    pub offset: usize,
     pub len: usize,
 }
 
@@ -51,7 +46,7 @@ pub enum UploadError {
     #[error("Error getting file metadata")]
     Metadata(io::Error),
     #[error("Error getting upload stream")]
-    UploadStream(io::Error),
+    UploadStream(ByteStreamError),
     #[error("Error uploading file")]
     PutObject(SdkError<PutObjectError>),
 }
@@ -88,23 +83,21 @@ pub fn upload(input: UploadInput<'_>) -> impl Straw<(), UploadEvent, UploadError
                     }
                 };
                 sender.send(UploadEvent::GettingUploadStream).await;
-                let stream = input
-                    .src
-                    .stream
-                    .get_stream()
+                let byte_stream = FsBuilder::new()
+                    .path(&input.src.path)
+                    .offset(input.src.offset as u64)
+                    .length(Length::Exact(input.src.len as u64))
+                    .build()
                     .await
                     .map_err(|e| MaybeRetryable::NotRetryable(UploadError::UploadStream(e)))?;
                 sender.send(UploadEvent::StartingUpload).await;
                 match input
                     .client
-                    // TODO: Compute checksum so we don't forget, or end up with a DEEP_ARCHIVE object which is corrupted
                     .put_object()
                     .bucket(input.dest.bucket)
                     .key(input.dest.object_key)
                     .storage_class(input.dest.storage_class.clone())
-                    .body(ByteStream::from_body_1_x(reqwest::Body::wrap_stream(
-                        stream,
-                    )))
+                    .body(byte_stream)
                     .content_length(input.src.len.try_into().unwrap())
                     .tagging(input.tagging)
                     .send()

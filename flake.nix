@@ -31,6 +31,8 @@
               rust-bin.stable.latest.default
               rust-analyzer
               awscli2
+              # For the crc32 command
+              toybox
             ];
           };
       }
