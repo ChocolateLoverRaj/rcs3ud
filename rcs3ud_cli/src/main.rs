@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, num::NonZero, time::Duration};
 
 use aws_config::BehaviorVersion;
-use aws_sdk_s3::{config::RequestChecksumCalculation, types::StorageClass};
+use aws_sdk_s3::types::StorageClass;
 use clap::Parser;
 use rcs3ud::{
     AmountLimiter, AnyTime, FileBackedAmountLimiter, S3Dest, UnlimitedAmountLimiter,
@@ -76,10 +76,7 @@ async fn main() {
                 object_key: &object_key,
                 storage_class: storage_class,
             };
-            let config = aws_config::defaults(BehaviorVersion::latest())
-                .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-                .load()
-                .await;
+            let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
             let client = aws_sdk_s3::Client::new(&config);
             if !chunked {
                 let mut straw = upload(UploadInput {
