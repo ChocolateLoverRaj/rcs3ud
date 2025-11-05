@@ -6,6 +6,7 @@ mod operation_scheduler;
 mod retry;
 mod start_of_next_month;
 mod upload;
+mod upload_2;
 mod upload_chunked;
 mod upload_file;
 
@@ -17,5 +18,6 @@ pub use serde;
 pub use start_of_next_month::*;
 pub use time;
 pub use upload::*;
+pub use upload_2::*;
 pub use upload_chunked::*;
 pub use upload_file::*;
