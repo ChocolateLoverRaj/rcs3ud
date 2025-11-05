@@ -91,6 +91,7 @@ pub async fn upload_2<ReserveError, MarkUsedError, SaveError>(
         .body(byte_stream)
         .content_length(src.len.try_into().unwrap())
         .tagging(tagging)
+        .if_none_match("*")
         .send()
         .await
         .map_err(UploadError2::Upload)?;
