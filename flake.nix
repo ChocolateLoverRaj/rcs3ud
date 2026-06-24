@@ -5,14 +5,15 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
     {
-      self,
       nixpkgs,
       rust-overlay,
       flake-utils,
+      crane,
       ...
     }:
     flake-utils.lib.eachDefaultSystem (
@@ -22,6 +23,7 @@
         pkgs = import nixpkgs {
           inherit system overlays;
         };
+        craneLib = crane.mkLib pkgs;
       in
       {
         devShells.default =
@@ -35,6 +37,14 @@
               toybox
             ];
           };
+        packages.default = craneLib.buildPackage {
+          pname = "rcs3ud_cli";
+          src = craneLib.cleanCargoSource ./.;
+          cargoExtraArgs = "-p rcs3ud_cli";
+          buildInputs = with pkgs; [
+            rustPlatform.bindgenHook
+          ];
+        };
       }
     );
 }
